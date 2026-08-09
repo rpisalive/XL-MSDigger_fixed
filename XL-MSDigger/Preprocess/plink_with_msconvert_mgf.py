@@ -3,7 +3,8 @@ import numpy as np
 import math
 import os
 import sys
-from mass_cal import mz_cal as M
+import re
+from Preprocess.mass_cal import mz_cal as M
 
 
 class plink_with_msconvert_mgf():
@@ -89,30 +90,303 @@ class plink_with_msconvert_mgf():
         ccs = coeff * peptide_k0
         return ccs
 
+    def build_mgf_metadata_index(self, mgf_dir):
+        """
+        Parse MGF metadata once and build:
+
+            TITLE -> (RT, ion_mobility)
+
+        TITLE-embedded metadata:
+            $<RT>$
+            #<ion mobility>#
+
+        takes precedence over explicit metadata fields:
+
+            RTINSECONDS=
+            ION_MOBILITY=
+
+        Returns
+        -------
+        metadata_index : dict
+            Mapping from spectrum TITLE to (rt, ion_mobility).
+
+        has_explicit_ion_mobility : bool
+            True only when explicit ION_MOBILITY= metadata
+            occurs in the MGF. This preserves the existing
+            decision about whether to use the CCS workflow.
+        """
+
+        metadata_index = {}
+
+        number_pattern = (
+            r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)"
+            r"(?:[eE][-+]?\d+)?"
+        )
+
+        rt_pattern = re.compile(
+            rf"\$({number_pattern})\$"
+        )
+
+        mobility_pattern = re.compile(
+            rf"#({number_pattern})#"
+        )
+
+        numeric_pattern = re.compile(
+            number_pattern
+        )
+
+        current_title = None
+        current_rt = None
+        current_ion_mobility = None
+
+        has_explicit_ion_mobility = False
+
+
+        def store_current():
+            if current_title is not None:
+                metadata_index[current_title] = (
+                    current_rt,
+                    current_ion_mobility
+                )
+
+
+        with open(
+            mgf_dir,
+            "r",
+            errors="replace"
+        ) as handle:
+
+            for raw_line in handle:
+
+                line = raw_line.strip()
+
+                if line == "BEGIN IONS":
+                    current_title = None
+                    current_rt = None
+                    current_ion_mobility = None
+                    continue
+
+
+                if line.startswith("TITLE="):
+
+                    current_title = (
+                        line[len("TITLE="):]
+                        .strip()
+                    )
+
+                    rt_match = rt_pattern.search(
+                        current_title
+                    )
+
+                    mobility_match = (
+                        mobility_pattern.search(
+                            current_title
+                        )
+                    )
+
+                    if rt_match is not None:
+                        current_rt = float(
+                            rt_match.group(1)
+                        )
+
+                    if mobility_match is not None:
+                        current_ion_mobility = float(
+                            mobility_match.group(1)
+                        )
+
+                    continue
+
+
+                if (
+                    line.startswith("RTINSECONDS=")
+                    and current_rt is None
+                ):
+
+                    try:
+                        current_rt = float(
+                            line.split(
+                                "=",
+                                1
+                            )[1].strip()
+                        )
+                    except (ValueError, TypeError):
+                        pass
+
+                    continue
+
+
+                if line.startswith("ION_MOBILITY="):
+
+                    has_explicit_ion_mobility = True
+
+                    if current_ion_mobility is None:
+
+                        payload = line.split(
+                            "=",
+                            1
+                        )[1].strip()
+
+                        numeric_values = (
+                            numeric_pattern.findall(
+                                payload
+                            )
+                        )
+
+                        if numeric_values:
+                            try:
+                                current_ion_mobility = float(
+                                    numeric_values[-1]
+                                )
+                            except (
+                                ValueError,
+                                TypeError
+                            ):
+                                pass
+
+                    continue
+
+
+                if line == "END IONS":
+
+                    store_current()
+
+                    current_title = None
+                    current_rt = None
+                    current_ion_mobility = None
+
+
+        # Defensive handling for malformed files lacking
+        # a final END IONS.
+        store_current()
+
+        return (
+            metadata_index,
+            has_explicit_ion_mobility
+        )
+
+
     def parse_mgf_info(self, spectrum, title):
-        """从msconvert生成的MGF文件中解析RT和Ion Mobility信息"""
+        """
+        Parse retention time and ion-mobility information from an MGF
+        spectrum.
+
+        Supports both:
+          1. Metadata embedded in TITLE:
+                 $<RT>$
+                 #<ion mobility>#
+          2. Standard MGF metadata lines:
+                 RTINSECONDS=
+                 ION_MOBILITY=
+
+        TITLE-embedded values take precedence when present.
+        """
         rt = None
         ion_mobility = None
 
-        title_line = f'TITLE={title}'
-        title_indices = np.where(spectrum == title_line)[0]
+        title = str(title).strip()
+
+        # Fast path: a pre-built TITLE -> (RT, k0)
+        # metadata index.
+        if isinstance(spectrum, dict):
+            return spectrum.get(
+                title,
+                (None, None)
+            )
+
+        number_pattern = (
+            r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)"
+            r"(?:[eE][-+]?\d+)?"
+        )
+
+        # Metadata embedded directly in TITLE
+        rt_match = re.search(
+            rf"\$({number_pattern})\$",
+            title
+        )
+
+        mobility_match = re.search(
+            rf"#({number_pattern})#",
+            title
+        )
+
+        if rt_match is not None:
+            rt = float(rt_match.group(1))
+
+        if mobility_match is not None:
+            ion_mobility = float(
+                mobility_match.group(1)
+            )
+
+        # Fall back to explicit MGF metadata fields
+        if spectrum is None:
+            return rt, ion_mobility
+
+        spectrum_text = np.asarray(
+            [
+                str(line).strip()
+                for line in np.asarray(spectrum).reshape(-1)
+            ],
+            dtype=object
+        )
+
+        title_line = f"TITLE={title}"
+
+        title_indices = np.flatnonzero(
+            spectrum_text == title_line
+        )
+
         if len(title_indices) == 0:
             return rt, ion_mobility
 
-        id = title_indices[0]
-                                     
-        for i in range(id + 1, min(id + 10, len(spectrum))):
-            line = str(spectrum[i])
-            if line.startswith('RTINSECONDS='):
-                rt = float(line.split('=')[1])
-            elif line.startswith('ION_MOBILITY='):
-                parts = line.split('=')[1].strip().split()
-                if len(parts) >= 2:
-                    ion_mobility = float(parts[1])
-            elif line.startswith('CHARGE=') or line == 'END IONS':
+        start_index = int(title_indices[0]) + 1
+
+        for i in range(
+            start_index,
+            min(start_index + 10, len(spectrum_text))
+        ):
+            line = spectrum_text[i]
+
+            if (
+                rt is None
+                and line.startswith("RTINSECONDS=")
+            ):
+                try:
+                    rt = float(
+                        line.split("=", 1)[1].strip()
+                    )
+                except (ValueError, TypeError):
+                    pass
+
+            elif (
+                ion_mobility is None
+                and line.startswith("ION_MOBILITY=")
+            ):
+                payload = line.split(
+                    "=",
+                    1
+                )[1].strip()
+
+                numeric_values = re.findall(
+                    number_pattern,
+                    payload
+                )
+
+                if numeric_values:
+                    try:
+                        ion_mobility = float(
+                            numeric_values[-1]
+                        )
+                    except (ValueError, TypeError):
+                        pass
+
+            elif (
+                line.startswith("CHARGE=")
+                or line == "END IONS"
+            ):
                 break
 
         return rt, ion_mobility
+
 
     def change_plink_filter_crosslink(self, plinkfile_dir, spectrum=None):
         """处理plink3生成的filtered_crosslinked_spectra文件"""
@@ -370,53 +644,303 @@ class plink_with_msconvert_mgf():
 
         return data
 
-    def match_msms(self, spectrum, m_z, title):
-        """匹配MS/MS谱图 - 使用原版高效方法"""
-        title_line = f'TITLE={title}'
-        title_indices = np.where(spectrum == title_line)[0]
-        if len(title_indices) == 0:
-            m_z_1 = [0 if mz != -1 else -1 for mz in m_z]
-            inten = [0 if mz != -1 else -1 for mz in m_z]
-            return m_z_1, inten
+    def build_mgf_index(self, mgf_dir):
+        """
+        Parse the MGF file once and build a dictionary mapping each
+        TITLE to its experimental m/z and intensity arrays.
+        """
+        mgf_index = {}
 
-        id = title_indices[0]
-        msms = []
-        intensity = []
-        id = id + 5                                                       
+        current_title = None
+        current_mz = []
+        current_intensity = []
 
-        for i in range(id, len(spectrum)):
-            if spectrum[i] == 'END IONS':
-                break
-            else:
-                try:
-                    a = str(spectrum[i])
-                    if ' ' in a:
-                        parts = a.split()
-                        msms.append(float(parts[0]))
-                        intensity.append(float(parts[1]))
-                except (ValueError, IndexError):
+        with open(mgf_dir, "r", errors="replace") as handle:
+            for raw_line in handle:
+                line = raw_line.strip()
+
+                if line == "BEGIN IONS":
+                    current_title = None
+                    current_mz = []
+                    current_intensity = []
                     continue
 
-        if not msms:
-            m_z_1 = [0 if mz != -1 else -1 for mz in m_z]
-            inten = [0 if mz != -1 else -1 for mz in m_z]
-            return m_z_1, inten
+                if line.startswith("TITLE="):
+                    current_title = line[len("TITLE="):].strip()
+                    continue
 
-        msms = np.array(msms)
-        intensity = np.array(intensity)
+                if line == "END IONS":
+                    if current_title is not None:
+                        mgf_index[current_title] = (
+                            np.asarray(current_mz, dtype=float),
+                            np.asarray(current_intensity, dtype=float)
+                        )
 
-        m_z_1 = []
-        inten = []
-        for mz in m_z:
-            if mz == -1:
-                m_z_1.append(-1), inten.append(-1)
+                    current_title = None
+                    current_mz = []
+                    current_intensity = []
+                    continue
+
+                if current_title is None:
+                    continue
+
+                parts = line.split()
+
+                if len(parts) < 2:
+                    continue
+
+                try:
+                    peak_mz = float(parts[0])
+                    peak_intensity = float(parts[1])
+                except (ValueError, TypeError):
+                    continue
+
+                if (
+                    np.isfinite(peak_mz)
+                    and np.isfinite(peak_intensity)
+                    and peak_mz > 0
+                ):
+                    current_mz.append(peak_mz)
+                    current_intensity.append(peak_intensity)
+
+        return mgf_index
+
+
+    def match_msms_indexed(self, mgf_index, m_z, title):
+        """
+        Match theoretical fragment m/z values using a pre-built
+        TITLE -> (experimental_mz, experimental_intensity) MGF index.
+        """
+
+        title = str(title).strip()
+
+        if title not in mgf_index:
+            print(f"WARNING: MGF title not found: {title}")
+
+            matched_mz = [
+                -1 if float(value) == -1 else 0
+                for value in m_z
+            ]
+
+            matched_intensity = [
+                -1 if float(value) == -1 else 0
+                for value in m_z
+            ]
+
+            return matched_mz, matched_intensity
+
+        experimental_mz, experimental_intensity = (
+            mgf_index[title]
+        )
+
+        if len(experimental_mz) == 0:
+            print(f"WARNING: No peaks parsed for: {title}")
+
+            matched_mz = [
+                -1 if float(value) == -1 else 0
+                for value in m_z
+            ]
+
+            matched_intensity = [
+                -1 if float(value) == -1 else 0
+                for value in m_z
+            ]
+
+            return matched_mz, matched_intensity
+
+        matched_mz = []
+        matched_intensity = []
+
+        for theoretical_mz in m_z:
+
+            theoretical_mz = float(theoretical_mz)
+
+            if theoretical_mz == -1:
+                matched_mz.append(-1)
+                matched_intensity.append(-1)
+                continue
+
+            if (
+                not np.isfinite(theoretical_mz)
+                or theoretical_mz <= 0
+            ):
+                matched_mz.append(0)
+                matched_intensity.append(0)
+                continue
+
+            relative_errors = (
+                np.abs(
+                    experimental_mz - theoretical_mz
+                )
+                / theoretical_mz
+            )
+
+            nearest_index = int(
+                np.argmin(relative_errors)
+            )
+
+            nearest_error = (
+                relative_errors[nearest_index]
+            )
+
+            if nearest_error <= self.frag_ppm:
+
+                matched_mz.append(
+                    float(
+                        experimental_mz[
+                            nearest_index
+                        ]
+                    )
+                )
+
+                matched_intensity.append(
+                    float(
+                        experimental_intensity[
+                            nearest_index
+                        ]
+                    )
+                )
+
             else:
-                msms1 = np.abs(msms - mz) / msms
-                if np.min(msms1) <= self.frag_ppm:
-                    m_z_1.append(msms[np.argmin(msms1)]), inten.append(intensity[np.argmin(msms1)])
-                else:
-                    m_z_1.append(0), inten.append(0)
-        return m_z_1, inten
+                matched_mz.append(0)
+                matched_intensity.append(0)
+
+        return matched_mz, matched_intensity
+
+
+    def match_msms(self, spectrum, m_z, title):
+        """
+        Match theoretical fragment m/z values to one MGF spectrum.
+        """
+
+        spectrum_text = np.asarray(
+            [
+                str(line).strip()
+                for line in np.asarray(spectrum).reshape(-1)
+            ],
+            dtype=object
+        )
+
+        title = str(title).strip()
+        title_line = f"TITLE={title}"
+
+        title_indices = np.flatnonzero(
+            spectrum_text == title_line
+        )
+
+        if len(title_indices) == 0:
+            print(f"WARNING: MGF title not found: {title}")
+
+            matched_mz = [
+                -1 if float(value) == -1 else 0
+                for value in m_z
+            ]
+
+            matched_intensity = [
+                -1 if float(value) == -1 else 0
+                for value in m_z
+            ]
+
+            return matched_mz, matched_intensity
+
+        start_index = int(title_indices[0]) + 1
+
+        experimental_mz = []
+        experimental_intensity = []
+
+        for i in range(start_index, len(spectrum_text)):
+            line = spectrum_text[i]
+
+            if line == "END IONS":
+                break
+
+            if line == "BEGIN IONS" or line.startswith("TITLE="):
+                break
+
+            parts = line.split()
+
+            if len(parts) < 2:
+                continue
+
+            try:
+                peak_mz = float(parts[0])
+                peak_intensity = float(parts[1])
+            except (ValueError, TypeError):
+                continue
+
+            if (
+                np.isfinite(peak_mz)
+                and np.isfinite(peak_intensity)
+                and peak_mz > 0
+            ):
+                experimental_mz.append(peak_mz)
+                experimental_intensity.append(peak_intensity)
+
+        if len(experimental_mz) == 0:
+            print(f"WARNING: No peaks parsed for: {title}")
+
+            matched_mz = [
+                -1 if float(value) == -1 else 0
+                for value in m_z
+            ]
+
+            matched_intensity = [
+                -1 if float(value) == -1 else 0
+                for value in m_z
+            ]
+
+            return matched_mz, matched_intensity
+
+        experimental_mz = np.asarray(
+            experimental_mz,
+            dtype=float
+        )
+
+        experimental_intensity = np.asarray(
+            experimental_intensity,
+            dtype=float
+        )
+
+        matched_mz = []
+        matched_intensity = []
+
+        for theoretical_mz in m_z:
+            theoretical_mz = float(theoretical_mz)
+
+            if theoretical_mz == -1:
+                matched_mz.append(-1)
+                matched_intensity.append(-1)
+                continue
+
+            if (
+                not np.isfinite(theoretical_mz)
+                or theoretical_mz <= 0
+            ):
+                matched_mz.append(0)
+                matched_intensity.append(0)
+                continue
+
+            relative_errors = (
+                np.abs(experimental_mz - theoretical_mz)
+                / theoretical_mz
+            )
+
+            nearest_index = int(np.argmin(relative_errors))
+            nearest_error = relative_errors[nearest_index]
+
+            if nearest_error <= self.frag_ppm:
+                matched_mz.append(
+                    float(experimental_mz[nearest_index])
+                )
+
+                matched_intensity.append(
+                    float(experimental_intensity[nearest_index])
+                )
+            else:
+                matched_mz.append(0)
+                matched_intensity.append(0)
+
+        return matched_mz, matched_intensity
 
     def filter_plink_precursor_results(self, data):
         """筛选相同肽中score最小的precursor"""
@@ -541,8 +1065,8 @@ class plink_with_msconvert_mgf():
         sys.stdout.write("Loading file......\r")
 
                        
-        spectrum = np.array(pd.read_csv(mgf_dir, sep='!'))
-        spectrum = spectrum.flatten()
+        # Build the MGF spectrum index once for fast candidate lookup.
+        mgf_index = self.build_mgf_index(mgf_dir)
 
                                                            
         data = plink_data
@@ -589,7 +1113,11 @@ class plink_with_msconvert_mgf():
                 m_z.append(mz)
 
                         
-            m_z_1, inten = self.match_msms(spectrum, m_z, title.iloc[0])
+            m_z_1, inten = self.match_msms_indexed(
+                mgf_index,
+                m_z,
+                title.iloc[0]
+            )
 
             if np.max(inten) > 0:
                 inten = np.array(inten) / np.max(inten)
@@ -698,49 +1226,310 @@ class plink_with_msconvert_mgf():
         return data6, data4_1, data5
 
     def process(self, plinkfile, mgf_dir):
-        """主处理函数 - 增加Ion Mobility检测"""
-        print('Processing data.......')
+        """
+        Preprocess pLink cross-link search results and the corresponding
+        MGF file.
 
-                                  
-        spectrum = np.array(pd.read_csv(mgf_dir, sep='!'))
-        spectrum = spectrum.flatten()
-        has_ion_mobility = any('ION_MOBILITY=' in str(line) for line in spectrum)
-        print(f"Ion Mobility detected: {has_ion_mobility}")
+        Outputs:
+          - fine-tuning MS/MS library
+          - optional CCS fine-tuning table
+          - RT fine-tuning table
+          - all-candidate MS/MS fragment table
+          - all-candidate precursor/RT/CCS table
+          - ion-mobility availability flag
+        """
+        print("Processing data.......")
 
-                    
-        plink_crosslink_data = self.change_plink_filter_crosslink(plinkfile, spectrum)
-                                                                                          
+        # --------------------------------------------------
+        # Load MGF text once for metadata parsing.
+        #
+        # Keep the repository's explicit ION_MOBILITY=
+        # detection here. TITLE-embedded #k0# values are
+        # parsed when needed but do not automatically switch
+        # the DDA workflow to the CCS model.
+        # --------------------------------------------------
 
-                   
+        print(
+            "Building MGF metadata index..."
+        )
+
+        (
+            mgf_metadata_index,
+            has_ion_mobility
+        ) = self.build_mgf_metadata_index(
+            mgf_dir
+        )
+
+        print(
+            "MGF spectra indexed:",
+            len(mgf_metadata_index)
+        )
+
+        print(
+            f"Ion Mobility detected: "
+            f"{has_ion_mobility}"
+        )
+
+        # --------------------------------------------------
+        # Fine-tuning identifications from filtered pLink
+        # results
+        # --------------------------------------------------
+
+        print(
+            "\nGenerating fine-tuning input tables..."
+        )
+
+        plink_crosslink_data_all = (
+            self.change_plink_filter_crosslink(
+                plinkfile,
+                mgf_metadata_index
+            )
+        )
+
+        # --------------------------------------------------
+        # Deep4D-XL fine-tuning must use intra-protein
+        # cross-linked PSMs only.
+        #
+        # Do NOT apply this filter to the all-candidate
+        # rescoring branch below.
+        # --------------------------------------------------
+
+        if "protein_type" in plink_crosslink_data_all.columns:
+            protein_type_col = "protein_type"
+        elif "Protein_Type" in plink_crosslink_data_all.columns:
+            protein_type_col = "Protein_Type"
+        else:
+            raise RuntimeError(
+                "Cannot enforce intra-protein fine-tuning: "
+                "protein type column is missing."
+            )
+
+        protein_type_values = (
+            plink_crosslink_data_all[protein_type_col]
+            .astype(str)
+            .str.strip()
+            .str.lower()
+        )
+
+        intra_mask = protein_type_values.isin(
+            [
+                "intra-protein",
+                "intra protein",
+                "intra"
+            ]
+        )
+
+        plink_crosslink_data = (
+            plink_crosslink_data_all.loc[
+                intra_mask
+            ]
+            .copy()
+            .reset_index(drop=True)
+        )
+
+        print(
+            "Filtered pLink cross-link PSMs:",
+            len(plink_crosslink_data_all)
+        )
+
+        print(
+            "Intra-protein PSMs used for fine-tuning:",
+            len(plink_crosslink_data)
+        )
+
+        print(
+            "Non-intra PSMs excluded from fine-tuning:",
+            len(plink_crosslink_data_all)
+            - len(plink_crosslink_data)
+        )
+
+        if len(plink_crosslink_data) == 0:
+            raise RuntimeError(
+                "No intra-protein cross-linked PSMs were found "
+                "for Deep4D-XL fine-tuning."
+            )
+
         if has_ion_mobility:
-            plink_crosslink_data_ccs = self.filter_plink_precursor_results(plink_crosslink_data)
-        plink_crosslink_data_rt = self.filter_plink_peptide_results(plink_crosslink_data)
+            plink_crosslink_data_ccs = (
+                self.filter_plink_precursor_results(
+                    plink_crosslink_data
+                )
+            )
 
-        complete_normal_library = self.genenrate_all_crosslink_fragment(plink_crosslink_data, mgf_dir)
-                                                                                                              
+        plink_crosslink_data_rt = (
+            self.filter_plink_peptide_results(
+                plink_crosslink_data
+            )
+        )
 
-        outputdir = mgf_dir.split('.mgf')[0]
+        complete_normal_library = (
+            self.genenrate_all_crosslink_fragment(
+                plink_crosslink_data,
+                mgf_dir
+            )
+        )
+
+        # --------------------------------------------------
+        # Generate all pLink candidate precursors.
+        #
+        # This stage was missing from the original process()
+        # even though candidate output paths were returned.
+        # --------------------------------------------------
+
+        print(
+            "\nGenerating all rescoring candidates..."
+        )
+
+        all_candidate_data = (
+            self.change_plink_total_results(
+                plinkfile,
+                mgf_metadata_index
+            )
+        )
+
+        print(
+            "Candidate rows:",
+            len(all_candidate_data)
+        )
+
+        print(
+            "Candidate unique titles:",
+            all_candidate_data["title"].nunique()
+        )
+
+        print(
+            "Candidate missing RT:",
+            all_candidate_data["rt"].isna().sum()
+        )
+
+        all_candidate_msms = (
+            self.genenrate_all_crosslink_fragment(
+                all_candidate_data,
+                mgf_dir
+            )
+        )
+
+        # --------------------------------------------------
+        # Output paths
+        # --------------------------------------------------
+
+        if mgf_dir.lower().endswith(".mgf"):
+            outputdir = mgf_dir[:-4]
+        else:
+            outputdir = mgf_dir
+
+        rt_dir = f"{outputdir}_rt.csv"
+        ccs_dir = f"{outputdir}_ccs.csv"
+        msms_dir = (
+            f"{outputdir}_complete_normal_library.csv"
+        )
+
+        candidate_msms_dir = (
+            f"{outputdir}_all_candidate_msms.csv"
+        )
+
+        candidate_rtccs_dir = (
+            f"{outputdir}_all_candidate.csv"
+        )
+
+        # --------------------------------------------------
+        # Write fine-tuning files
+        # --------------------------------------------------
+
         if has_ion_mobility:
-            plink_crosslink_data_ccs.to_csv(f'{outputdir}_ccs.csv', index=False)
-        plink_crosslink_data_rt.to_csv(f'{outputdir}_rt.csv', index=False)
-                                                                                         
-                                                                                             
-        complete_normal_library.to_csv(f'{outputdir}_complete_normal_library.csv', index=False)
+            plink_crosslink_data_ccs.to_csv(
+                ccs_dir,
+                index=False
+            )
 
-        rt_dir = f'{outputdir}_rt.csv'
-        ccs_dir = f'{outputdir}_ccs.csv'
-        msms_dir = f'{outputdir}_complete_normal_library.csv'
-        candidate_msms_dir = f'{outputdir}_all_candidate_msms.csv'
-        candidate_rtccs_dir = f'{outputdir}_all_candidate.csv'
+        plink_crosslink_data_rt.to_csv(
+            rt_dir,
+            index=False
+        )
 
-        print(f"Processing completed. Ion Mobility support: {has_ion_mobility}")
-        return msms_dir, ccs_dir, rt_dir, candidate_msms_dir, candidate_rtccs_dir, has_ion_mobility
+        complete_normal_library.to_csv(
+            msms_dir,
+            index=False
+        )
 
+        # --------------------------------------------------
+        # Write candidate files
+        # --------------------------------------------------
 
+        all_candidate_data.to_csv(
+            candidate_rtccs_dir,
+            index=False
+        )
 
-if __name__ == '__main__':
-    plink = plink_with_msconvert_mgf()
-    msms_dir, ccs_dir, rt_dir, candidate_msms_dir, candidate_rtccs_dir = plink.process(
-        'G:\moran\XXX\PXD017620\C_Lee_090916_ymitos_BS3_XL_B13_C1\C_Lee_090916_ymitos_BS3_XL_B13_C1_10_Rep1',
-        'G:\moran\XXX\PXD017620\C_Lee_090916_ymitos_BS3_XL_B13_C1\C_Lee_090916_ymitos_BS3_XL_B13_C1_10_Rep1.mgf'
-    )
+        all_candidate_msms.to_csv(
+            candidate_msms_dir,
+            index=False
+        )
+
+        # --------------------------------------------------
+        # Validate that the required outputs now exist
+        # --------------------------------------------------
+
+        required_outputs = [
+            msms_dir,
+            rt_dir,
+            candidate_msms_dir,
+            candidate_rtccs_dir
+        ]
+
+        if has_ion_mobility:
+            required_outputs.append(ccs_dir)
+
+        missing_outputs = [
+            file
+            for file in required_outputs
+            if not os.path.exists(file)
+        ]
+
+        if missing_outputs:
+            raise RuntimeError(
+                "Preprocessing failed to create required "
+                f"outputs: {missing_outputs}"
+            )
+
+        print("\nProcessing completed.")
+
+        print(
+            "Fine-tuning MS/MS:",
+            msms_dir
+        )
+
+        print(
+            "Fine-tuning RT:",
+            rt_dir
+        )
+
+        if has_ion_mobility:
+            print(
+                "Fine-tuning CCS:",
+                ccs_dir
+            )
+
+        print(
+            "Candidate table:",
+            candidate_rtccs_dir
+        )
+
+        print(
+            "Candidate MS/MS:",
+            candidate_msms_dir
+        )
+
+        print(
+            "Ion Mobility support:",
+            has_ion_mobility
+        )
+
+        return (
+            msms_dir,
+            ccs_dir,
+            rt_dir,
+            candidate_msms_dir,
+            candidate_rtccs_dir,
+            has_ion_mobility
+        )

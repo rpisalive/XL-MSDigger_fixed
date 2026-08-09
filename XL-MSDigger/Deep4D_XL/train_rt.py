@@ -1,5 +1,13 @@
 import logging
 import os
+
+# Enforce deterministic cuBLAS behaviour for reproducible
+# Deep4D-XL fine-tuning on a fixed CUDA/PyTorch stack.
+os.environ.setdefault(
+    "CUBLAS_WORKSPACE_CONFIG",
+    ":4096:8"
+)
+import random
 import numpy as  np
 import torch
 import torch.nn as nn
@@ -11,6 +19,30 @@ from torch.utils.data import DataLoader, random_split
 from torch.utils.tensorboard import SummaryWriter
 from Deep4D_XL.utils.Eval_crosslink_rt import eval_model
 from Deep4D_XL.model.crosslink_rt_model import Transformer
+
+def configure_deterministic_training(seed=1):
+    """
+    Configure repeatable Deep4D-XL training on the same
+    PyTorch/CUDA/hardware stack.
+    """
+    random.seed(seed)
+    np.random.seed(seed)
+
+    torch.manual_seed(seed)
+
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
+
+    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.deterministic = True
+
+    # Fail rather than silently use a known
+    # nondeterministic PyTorch operation.
+    torch.use_deterministic_algorithms(
+        True
+    )
+
 
 def get_mask(peptide, length):
     mask = torch.zeros(peptide.size(0), peptide.size(1))
@@ -78,9 +110,9 @@ def do_train(traindir, load_rt_param_dir, epochs, batch_size, lr, vali_rate):
         pass
     else:
         os.makedirs(checkpoint_dir)
-    torch.cuda.manual_seed(1)
-    torch.manual_seed(1)
-    np.random.seed(1)
+    configure_deterministic_training(
+        seed=1
+    )
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')                
     print(device)
     logging.info(f'Using device {device}')

@@ -1,6 +1,14 @@
 import  logging
 import os
+
+# Enforce deterministic cuBLAS behaviour for reproducible
+# Deep4D-XL fine-tuning on a fixed CUDA/PyTorch stack.
+os.environ.setdefault(
+    "CUBLAS_WORKSPACE_CONFIG",
+    ":4096:8"
+)
 import math
+import random
 import numpy as  np
 import torch
 import torch.nn as nn
@@ -11,6 +19,30 @@ from Deep4D_XL.dataset.Crosslink_Dataset_msms import Mydata_label
 from torch.utils.data import DataLoader, random_split
 from torch.utils.tensorboard import SummaryWriter
 from Deep4D_XL.utils.Eval_crosslink_msms import eval_model
+
+
+def configure_deterministic_training(seed=1):
+    """
+    Configure repeatable Deep4D-XL training on the same
+    PyTorch/CUDA/hardware stack.
+    """
+    random.seed(seed)
+    np.random.seed(seed)
+
+    torch.manual_seed(seed)
+
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
+
+    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.deterministic = True
+
+    # Fail rather than silently use a known
+    # nondeterministic PyTorch operation.
+    torch.use_deterministic_algorithms(
+        True
+    )
 
 
 def SL_loss(msms, msms_pre):
@@ -83,9 +115,9 @@ def train(model,device,epochs=30, batch_size=50,lr=0.0001,val_percent=0.1, train
     return best_checkpoint
 
 def do_train(traindir, load_msms_param_dir, epochs, batch_size, lr, vali_rate):
-    torch.cuda.manual_seed(1)
-    torch.manual_seed(1)
-    np.random.seed(1)
+    configure_deterministic_training(
+        seed=1
+    )
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')                
     print(device)
     logging.info(f'Using device {device}')      

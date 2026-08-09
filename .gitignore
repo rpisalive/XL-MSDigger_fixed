@@ -1,0 +1,78 @@
+# ============================================================
+# Python
+# ============================================================
+
+__pycache__/
+*.py[cod]
+*$py.class
+
+# ============================================================
+# OS / editor metadata
+# ============================================================
+
+.DS_Store
+__MACOSX/
+*.swp
+*.swo
+*~
+
+# ============================================================
+# XL-MSDigger generated encoding directories
+# ============================================================
+
+**/feature_encoding/
+**/candidate_feature_encoding/
+
+# TensorBoard / temporary directories
+**/runs/
+**/temp/
+
+# ============================================================
+# Local pretrained / fine-tuned model weights
+#
+# These are large binary files and are not part of the
+# corrected source-code commit.
+# ============================================================
+
+XL-MSDigger/Deep4D_XL/checkpoint/
+
+# ============================================================
+# Local validation / benchmark data
+# ============================================================
+
+test_data/
+
+# ============================================================
+# HPC / SLURM logs
+# ============================================================
+
+*.out
+*.err
+slurm-*.out
+
+# ============================================================
+# Local archives / backups
+# ============================================================
+
+*.tar.gz
+*.tgz
+*.zip
+
+*.bak
+*.backup
+*.pre_final_step*
+*.pre_determinism_fix
+*.pre_metadata_index_fix
+*.before_mgf_index_fix
+
+# ============================================================
+# Common XL-MSDigger generated result files
+# ============================================================
+
+*_complete_normal_library.csv
+*_all_candidate.csv
+*_all_candidate_msms.csv
+*_candidate_feature.csv
+*_dnn_parameter_search.csv
+*_rescore_results.csv
+*_rescore_results1.csv

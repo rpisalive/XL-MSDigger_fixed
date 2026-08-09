@@ -336,8 +336,33 @@ class Rescore_DNN():
         return data
 
     def run(self, args, data, feature_dir):
-        data1, data2 = self.cv_score(args, data, feature_dir)  ##data1是参数，data2是重打分结果
-        return data2
+        parameter_table, rescore_result = self.cv_score(
+            args,
+            data,
+            feature_dir
+        )
+
+        parameter_search_dir = (
+            feature_dir.rsplit(".csv", 1)[0]
+            + "_dnn_parameter_search.csv"
+        )
+
+        parameter_table.to_csv(
+            parameter_search_dir,
+            index=False
+        )
+
+        print(
+            "DNN parameter search saved:",
+            parameter_search_dir
+        )
+
+        print(
+            "DNN parameter combinations:",
+            len(parameter_table)
+        )
+
+        return rescore_result
 
 class Rescore_SVM():
     def cv_score(self, data):  ###data提取后的feature信息

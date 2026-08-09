@@ -17,12 +17,23 @@ def get_args():
     parser.add_argument('--finetune', type=int, default=1)
     parser.add_argument('--rescore_model', type=str, default='dnn')
     parser.add_argument('--rescore_fdr', type=float, default=0.01)
-    parser.add_argument('--rescore_batch_size', type=float, default=200)
+    parser.add_argument('--rescore_batch_size', type=int, default=200)
     parser.add_argument('--rescore_vali_rate', type=float, default=0.1)
     parser.add_argument('--rescore_model_parameter', type=str, default=None)
     parser.add_argument('--seed', type=int, default=1)
     parser.add_argument('--fasta', type=str, default=None)
     parser.add_argument('--mzid', type=int, default=1)
+    parser.add_argument(
+        '--cleanup_intermediates',
+        type=int,
+        choices=[0, 1],
+        default=0,
+        help=(
+            'Delete preprocessing, encoding, and checkpoint '
+            'intermediates after a successful run. '
+            'Default: 0 (preserve intermediates).'
+        )
+    )
     parser.add_argument('--mod_ini', type=str, default=DEFAULT_MOD_INI)
     return parser.parse_args()
 
@@ -41,7 +52,32 @@ def find_plink_params(plink_path):
 def run():
     args = get_args()          
     plink = plink_with_msconvert_mgf()
-    msms_dir, rt_dir, candidate_msms_dir, candidate_rtccs_dir = plink.process(args.plinkfile, args.mgf_dir)
+    (
+        msms_dir,
+        ccs_dir,
+        rt_dir,
+        candidate_msms_dir,
+        candidate_rtccs_dir,
+        has_ion_mobility
+    ) = plink.process(
+        args.plinkfile,
+        args.mgf_dir
+    )
+
+    # This DDA driver currently uses the no-CCS
+    # Deep4D-XL fine-tuning/prediction modules.
+    if has_ion_mobility:
+        raise NotImplementedError(
+            "Explicit ION_MOBILITY metadata was detected, "
+            "but XL-MSDigger_DDA_plink.py currently uses "
+            "the no-CCS DDA workflow. Refusing to silently "
+            "run the wrong model."
+        )
+
+    print(
+        "DDA prediction mode: no-CCS "
+        "(RT + MS/MS)"
+    )
     if args.finetune == 1:
         print('Finetuning the model......')
         train = train_model()
@@ -52,8 +88,88 @@ def run():
         msms_paradir = os.path.join(base_dir, 'Deep4D_XL', 'checkpoint', 'PXD017620', 'MSMS.pth')
         rt_paradir = os.path.join(base_dir, 'Deep4D_XL', 'checkpoint', 'PXD017620', 'RT.pth')
     generate = generate_feature()
-    candidate_feature = generate.run(candidate_msms_dir, candidate_rtccs_dir, msms_paradir, rt_paradir)
-    candidate_feature_dir = candidate_rtccs_dir.split('.csv')[0] + '_candidate_feature.csv'
+    candidate_feature = generate.run(
+        candidate_msms_dir,
+        candidate_rtccs_dir,
+        msms_paradir,
+        rt_paradir
+    )
+
+    # --------------------------------------------------
+    # pLink compatibility aliases required by the
+    # DDA rescoring implementation.
+    #
+    # Validation against the original pLink output
+    # established:
+    #   Re-score_CSM = score
+    #   Q-value_CSM  = Q-value
+    # --------------------------------------------------
+
+    required_source_columns = [
+        "score",
+        "Q-value"
+    ]
+
+    missing_source_columns = [
+        col
+        for col in required_source_columns
+        if col not in candidate_feature.columns
+    ]
+
+    if missing_source_columns:
+        raise RuntimeError(
+            "Cannot prepare DDA rescoring features. "
+            f"Missing columns: {missing_source_columns}"
+        )
+
+    candidate_feature["Re-score_CSM"] = (
+        candidate_feature["score"]
+    )
+
+    candidate_feature["Q-value_CSM"] = (
+        candidate_feature["Q-value"]
+    )
+
+    print(
+        "Candidate feature rows:",
+        len(candidate_feature)
+    )
+
+    print(
+        "Re-score_CSM equals score:",
+        candidate_feature["Re-score_CSM"]
+        .equals(candidate_feature["score"])
+    )
+
+    print(
+        "Q-value_CSM equals Q-value:",
+        candidate_feature["Q-value_CSM"]
+        .equals(candidate_feature["Q-value"])
+    )
+
+    if (
+        "Target_Decoy" in candidate_feature.columns
+    ):
+        original_positive_count = (
+            (
+                candidate_feature["Target_Decoy"] == 2
+            )
+            &
+            (
+                candidate_feature["Q-value_CSM"]
+                <= args.rescore_fdr
+            )
+        ).sum()
+
+        print(
+            "Original target positives at rescoring FDR:",
+            original_positive_count
+        )
+
+    candidate_feature_dir = (
+        candidate_rtccs_dir.split(".csv")[0]
+        + "_candidate_feature.csv"
+    )
     candidate_feature.to_csv(candidate_feature_dir, index=False)
     candidate_feature = pd.read_csv(candidate_feature_dir)
     if args.rescore_model == 'svm':
@@ -87,18 +203,64 @@ def run():
                 mzid_out = rescore_results_dir.rsplit('.', 1)[0] + '.mzid'
                 build_mzid(rescore_results_dir, args.fasta, args.mgf_dir, plink_params_path, args.mod_ini, mzid_out)
                 print(f'mzIdentML saved: {mzid_out}')
-    os.remove(msms_dir)
-    os.remove(rt_dir)
-    os.remove(candidate_msms_dir)
-    os.remove(candidate_rtccs_dir)
-    folder_path = os.path.dirname(args.mgf_dir)
-    import shutil
-    candidate_feature_encoding_dir = folder_path + '/candidate_feature_encoding'
-    checkpoint_dir = folder_path + '/checkpoint'
-    feature_encoding_dir = folder_path + '/feature_encoding'
-    shutil.rmtree(candidate_feature_encoding_dir, ignore_errors=True)
-    shutil.rmtree(checkpoint_dir, ignore_errors=True)
-    shutil.rmtree(feature_encoding_dir, ignore_errors=True)
+    # --------------------------------------------------
+    # Optional cleanup
+    #
+    # Preserve intermediates by default so preprocessing,
+    # fine-tuning, prediction, and rescoring outputs can be
+    # audited and reproduced.
+    # --------------------------------------------------
+
+    if args.cleanup_intermediates == 1:
+        print(
+            "Cleaning intermediate files and directories..."
+        )
+
+        intermediate_files = [
+            msms_dir,
+            rt_dir,
+            candidate_msms_dir,
+            candidate_rtccs_dir
+        ]
+
+        for intermediate_file in intermediate_files:
+            if os.path.isfile(intermediate_file):
+                os.remove(intermediate_file)
+
+        folder_path = os.path.dirname(
+            os.path.abspath(args.mgf_dir)
+        )
+
+        import shutil
+
+        intermediate_directories = [
+            os.path.join(
+                folder_path,
+                "candidate_feature_encoding"
+            ),
+            os.path.join(
+                folder_path,
+                "checkpoint"
+            ),
+            os.path.join(
+                folder_path,
+                "feature_encoding"
+            ),
+        ]
+
+        for intermediate_directory in intermediate_directories:
+            shutil.rmtree(
+                intermediate_directory,
+                ignore_errors=True
+            )
+
+        print("Intermediate cleanup completed.")
+
+    else:
+        print(
+            "Intermediate files preserved "
+            "(--cleanup_intermediates 0)."
+        )
 
 if __name__ == '__main__':
     run()
