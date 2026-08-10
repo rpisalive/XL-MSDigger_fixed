@@ -1,4 +1,22 @@
-# XL-MSDigger
+# XL-MSDigger_fixed
+
+> **Independent bug-fixed derivative of XL-MSDigger**
+>
+> This repository is an independently maintained modification of the original
+> [Chen-micslab/XL-MSDigger](https://github.com/Chen-micslab/XL-MSDigger).
+> It is not the official XL-MSDigger repository.
+>
+> The modifications in this repository address reproducibility and execution
+> issues identified during validation of the DDA pLink2 workflow, including
+> MGF preprocessing, candidate generation, DNN rescoring output preservation,
+> and deterministic Deep4D-XL fine-tuning.
+>
+> Original XL-MSDigger authors and software remain credited under the
+> repository's MIT License.
+
+---
+
+## Original XL-MSDigger documentation
 Here, we constructed Deep4D-XL, a deep learning tool capable of accurately predicting cross-linked peptide’s multi-dimensional information, including retention time, collisional cross-section, fragment ion intensity. Using Deep4D-XL as the core, we developed XL-MSDigger, a pipeline for comprehensive analysis of cross-linking mass spectrometry data acquired through both DDA and DIA approaches.
 ## Environment Setup
 Create a new conda environment first:
