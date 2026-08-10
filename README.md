@@ -16,6 +16,69 @@
 
 ---
 
+## Validated fixes and reproducibility
+
+This repository contains targeted fixes to the DDA pLink2 workflow of XL-MSDigger. The corrected workflow was validated using the original XL-MSDigger pLink2 test dataset and an end-to-end run from pLink preprocessing through Deep4D-XL fine-tuning, candidate feature prediction, DNN rescoring, and final 1% FDR filtering.
+
+The main validated fixes are:
+
+- corrected package import handling in the pLink/MGF preprocessing module;
+- single-pass MGF metadata indexing to avoid repeated full-file searches;
+- support for retention time and ion-mobility metadata embedded in MGF `TITLE` fields;
+- corrected and indexed MGF fragment-spectrum matching;
+- generation of the all-candidate precursor and MS/MS files required for rescoring;
+- restriction of Deep4D-XL fine-tuning to intra-protein cross-linked PSMs, while retaining all candidates for downstream rescoring;
+- corrected six-value preprocessing return handling in the DDA driver;
+- explicit protection against silently applying the no-CCS DDA workflow to data containing explicit ion-mobility metadata;
+- preservation of the full DNN parameter-search table;
+- preservation of preprocessing and model intermediates by default, with optional cleanup;
+- deterministic Deep4D-XL MS/MS and RT fine-tuning on the validated CUDA/PyTorch/hardware stack.
+
+### Deterministic training validation
+
+Two independent Deep4D-XL fine-tuning runs were performed using identical intra-protein training inputs in separate fresh Python processes.
+
+Both MS/MS checkpoints were byte-identical and had SHA256:
+
+```text
+9b08fa32ff39852c9f8e21ad69a623672c183156bdefd32104621954c975464a
+```
+
+Both RT checkpoints were byte-identical and had SHA256:
+
+```text
+f7be1713f249c65c5326c8d0df9b4a2d0a687915b0beadfe82c3ff0be60805c1
+```
+
+The same checkpoint hashes were reproduced during the subsequent complete end-to-end XL-MSDigger run.
+
+### End-to-end DDA pLink2 validation
+
+The final deterministic end-to-end run processed 76,077 candidate CSMs and completed successfully.
+
+At 1% FDR for inter-protein target CSMs:
+
+| Metric | Original pLink result | Fixed XL-MSDigger result |
+|---|---:|---:|
+| Target CSMs | 75 | 83 |
+| Retained original targets | — | 65 |
+| Newly identified targets | — | 18 |
+| Lost original targets | — | 10 |
+| Sensitivity to original targets | — | 86.7% |
+| Net change in target CSM count | — | +10.7% |
+
+The selected DNN rescoring configuration for this validation run used 2-fold cross-validation, 30 epochs, a learning rate of `0.01`, and a maximum training sample size of `2000`.
+
+These values should be interpreted as validation results for the supplied test dataset rather than as expected identification counts for other datasets.
+
+### Reproducibility scope
+
+Deterministic checkpoint reproduction was validated on the same software and GPU stack used during testing, including PyTorch `2.0.1+cu118` on an NVIDIA H200 NVL GPU. PyTorch does not guarantee bitwise reproducibility across different releases, CUDA versions, platforms, or hardware, so identical checkpoint hashes should not be assumed across arbitrary environments.
+
+The upstream XL-MSDigger project remains available at [Chen-micslab/XL-MSDigger](https://github.com/Chen-micslab/XL-MSDigger). This repository is an independently maintained bug-fixed derivative and is not an official release of the original project.
+
+---
+
 ## Original XL-MSDigger documentation
 Here, we constructed Deep4D-XL, a deep learning tool capable of accurately predicting cross-linked peptide’s multi-dimensional information, including retention time, collisional cross-section, fragment ion intensity. Using Deep4D-XL as the core, we developed XL-MSDigger, a pipeline for comprehensive analysis of cross-linking mass spectrometry data acquired through both DDA and DIA approaches.
 ## Environment Setup
