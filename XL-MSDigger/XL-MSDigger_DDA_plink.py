@@ -1,7 +1,9 @@
 import argparse
 from Preprocess.plink_with_msconvert_mgf import plink_with_msconvert_mgf
-from Deep4D_XL.Finetune_noccs import train_model
-from DDA_rescore.predict_feature_noccs import generate_feature
+from Deep4D_XL.Finetune_noccs import train_model as train_model_noccs
+from Deep4D_XL.Finetune import train_model as train_model_ccs
+from DDA_rescore.predict_feature_noccs import generate_feature as generate_feature_noccs
+from DDA_rescore.predict_feature import generate_feature as generate_feature_ccs
 from DDA_rescore.DDA_rescore_plink3 import Rescore_SVM, Rescore_DNN
 from DDA_rescore.mzid_writer import build_mzid
 import os
@@ -64,36 +66,172 @@ def run():
         args.mgf_dir
     )
 
-    # This DDA driver currently uses the no-CCS
-    # Deep4D-XL fine-tuning/prediction modules.
+    # --------------------------------------------------
+    # Select the Deep4D-XL DDA workflow from the
+    # ion-mobility metadata detected during preprocessing.
+    #
+    # no-CCS:
+    #   MS/MS + RT
+    #
+    # CCS-aware:
+    #   MS/MS + RT + CCS
+    # --------------------------------------------------
+
+    base_dir = os.path.dirname(
+        os.path.abspath(__file__)
+    )
+
     if has_ion_mobility:
-        raise NotImplementedError(
-            "Explicit ION_MOBILITY metadata was detected, "
-            "but XL-MSDigger_DDA_plink.py currently uses "
-            "the no-CCS DDA workflow. Refusing to silently "
-            "run the wrong model."
+
+        print(
+            "DDA prediction mode: CCS-aware "
+            "(RT + CCS + MS/MS)"
         )
 
-    print(
-        "DDA prediction mode: no-CCS "
-        "(RT + MS/MS)"
-    )
-    if args.finetune == 1:
-        print('Finetuning the model......')
-        train = train_model()
-        msms_paradir, rt_paradir = train.finetune(msms_dir, rt_dir)
+        if args.finetune == 1:
+
+            print(
+                "Finetuning MS/MS, CCS, and RT models......"
+            )
+
+            train = train_model_ccs()
+
+            (
+                msms_paradir,
+                ccs_paradir,
+                rt_paradir
+            ) = train.finetune(
+                msms_dir,
+                ccs_dir,
+                rt_dir
+            )
+
+        else:
+
+            print(
+                "No Finetuning: using bundled "
+                "MS/MS, CCS, and RT checkpoints"
+            )
+
+            msms_paradir = os.path.join(
+                base_dir,
+                "Deep4D_XL",
+                "checkpoint",
+                "msms.pth"
+            )
+
+            ccs_paradir = os.path.join(
+                base_dir,
+                "Deep4D_XL",
+                "checkpoint",
+                "ccs.pth"
+            )
+
+            rt_paradir = os.path.join(
+                base_dir,
+                "Deep4D_XL",
+                "checkpoint",
+                "rt.pth"
+            )
+
+            required_model_files = [
+                msms_paradir,
+                ccs_paradir,
+                rt_paradir
+            ]
+
+            missing_model_files = [
+                model_file
+                for model_file in required_model_files
+                if not os.path.isfile(model_file)
+            ]
+
+            if missing_model_files:
+                raise RuntimeError(
+                    "CCS-aware DDA prediction requires "
+                    "bundled MS/MS, CCS, and RT checkpoints. "
+                    f"Missing: {missing_model_files}"
+                )
+
+        generate = generate_feature_ccs()
+
+        candidate_feature = generate.run(
+            candidate_msms_dir,
+            candidate_rtccs_dir,
+            msms_paradir,
+            ccs_paradir,
+            rt_paradir
+        )
+
+        if "ccs_RE" not in candidate_feature.columns:
+            raise RuntimeError(
+                "CCS-aware DDA feature generation completed "
+                "without producing the required ccs_RE feature."
+            )
+
+        print(
+            "CCS feature generated:",
+            "ccs_RE"
+        )
+
+        print(
+            "CCS feature missing values:",
+            candidate_feature["ccs_RE"].isna().sum()
+        )
+
     else:
-        print('No Finetuning')
-        base_dir = os.path.dirname(os.path.abspath(__file__))
-        msms_paradir = os.path.join(base_dir, 'Deep4D_XL', 'checkpoint', 'PXD017620', 'MSMS.pth')
-        rt_paradir = os.path.join(base_dir, 'Deep4D_XL', 'checkpoint', 'PXD017620', 'RT.pth')
-    generate = generate_feature()
-    candidate_feature = generate.run(
-        candidate_msms_dir,
-        candidate_rtccs_dir,
-        msms_paradir,
-        rt_paradir
-    )
+
+        print(
+            "DDA prediction mode: no-CCS "
+            "(RT + MS/MS)"
+        )
+
+        if args.finetune == 1:
+
+            print(
+                "Finetuning MS/MS and RT models......"
+            )
+
+            train = train_model_noccs()
+
+            (
+                msms_paradir,
+                rt_paradir
+            ) = train.finetune(
+                msms_dir,
+                rt_dir
+            )
+
+        else:
+
+            print("No Finetuning")
+
+            # Preserve the previously validated
+            # no-CCS checkpoint behaviour.
+            msms_paradir = os.path.join(
+                base_dir,
+                "Deep4D_XL",
+                "checkpoint",
+                "PXD017620",
+                "MSMS.pth"
+            )
+
+            rt_paradir = os.path.join(
+                base_dir,
+                "Deep4D_XL",
+                "checkpoint",
+                "PXD017620",
+                "RT.pth"
+            )
+
+        generate = generate_feature_noccs()
+
+        candidate_feature = generate.run(
+            candidate_msms_dir,
+            candidate_rtccs_dir,
+            msms_paradir,
+            rt_paradir
+        )
 
     # --------------------------------------------------
     # pLink compatibility aliases required by the
@@ -218,6 +356,7 @@ def run():
 
         intermediate_files = [
             msms_dir,
+            ccs_dir,
             rt_dir,
             candidate_msms_dir,
             candidate_rtccs_dir

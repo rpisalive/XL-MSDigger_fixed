@@ -26,9 +26,43 @@ class train_model():
         return feature_file
 
     def train(self, feature_file):
-        msms_paradir = train_msms(feature_file, self.load_msms_param_dir, self.epochs, self.batch_size, self.msms_lr, self.vali_rate)
-        ccs_paradir = train_ccs(feature_file, self.load_ccs_param_dir, self.epochs, self.batch_size, self.ccs_lr, self.vali_rate)
-        rt_paradir = train_rt(feature_file, self.load_rt_param_dir, self.epochs, self.batch_size, self.rt_lr, self.vali_rate)
+        batch_size_adj = self.batch_size
+
+        supervised_counts = {}
+
+        for feature_name in ('rt', 'ccs'):
+            feature_dir = os.path.join(feature_file, feature_name)
+
+            if not os.path.isdir(feature_dir):
+                raise RuntimeError(
+                    f"Missing encoded {feature_name} directory: {feature_dir}"
+                )
+
+            supervised_counts[feature_name] = len([
+                f
+                for f in os.listdir(feature_dir)
+                if os.path.isfile(os.path.join(feature_dir, f))
+            ])
+
+        min_supervised_files = min(supervised_counts.values())
+        adjusted_size = int(min_supervised_files * self.vali_rate)
+
+        if adjusted_size <= 0:
+            raise RuntimeError(
+                "CCS fine-tuning has too few encoded supervised examples "
+                f"for validation: {supervised_counts}"
+            )
+
+        if adjusted_size < self.batch_size:
+            batch_size_adj = adjusted_size
+            print(
+                f"[INFO] Batch size adjusted to {batch_size_adj} "
+                f"based on CCS/RT encoded counts {supervised_counts}."
+            )
+
+        msms_paradir = train_msms(feature_file, self.load_msms_param_dir, self.epochs, batch_size_adj, self.msms_lr, self.vali_rate)
+        ccs_paradir = train_ccs(feature_file, self.load_ccs_param_dir, self.epochs, batch_size_adj, self.ccs_lr, self.vali_rate)
+        rt_paradir = train_rt(feature_file, self.load_rt_param_dir, self.epochs, batch_size_adj, self.rt_lr, self.vali_rate)
         return msms_paradir, ccs_paradir, rt_paradir
 
     def finetune(self, msms_filedir, ccs_filedir, rt_filedir):
