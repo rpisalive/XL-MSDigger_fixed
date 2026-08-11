@@ -176,7 +176,8 @@ class Rescore_DNN():
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')  ##判断使用GPU还是CPU
         print(device)
         logging.info(f'Using device {device}')
-        model = DNN_model()  ###生成模型
+        feature_num = feature.shape[1]
+        model = DNN_model(feature_num=feature_num)  ###生成模型
         if args.rescore_model_parameter:
             model.load_state_dict(torch.load(args.rescore_model_parameter, map_location=device))
             logging.info(f'Model parameters loaded from {args.rescore_model_parameter}')
@@ -196,7 +197,8 @@ class Rescore_DNN():
         return para_dir, best_index, checkpoint_dir
 
     def do_predict(self, para_dir, test_feature, batch_size):
-        model = DNN_model()
+        feature_num = test_feature.shape[1]
+        model = DNN_model(feature_num=feature_num)
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         model.load_state_dict(torch.load(para_dir, map_location=device, weights_only=True))
         logging.info(f'Model parameters loaded from {para_dir}')
@@ -221,6 +223,12 @@ class Rescore_DNN():
         print(data)
         feature_list = ['Charge', 'Re-score_CSM', 'len1', 'len2', 'rt_AE', 'match_num', 'match_num1', 'match_num2',
                         'both_m_p_num', 'both_m_p_num1', 'both_m_p_num2', 'cosine', 'SA', 'pearson', 'spearman']
+
+        if 'ccs_RE' in data.columns:
+            feature_list.append('ccs_RE')
+            print('DNN rescoring mode: CCS-aware (16 features)')
+        else:
+            print('DNN rescoring mode: no-CCS (15 features)')
         # feature_list = ['Charge', 'SVM_Score', 'len1', 'len2', 'rt_AE', 'ccs_RE', 'match_num', 'match_num1', 'match_num2',
         #                 'both_m_p_num', 'both_m_p_num1', 'both_m_p_num2', 'cosine']
         # feature_list = ['Charge', 'SVM_Score', 'len1', 'len2', 'rt_AE', 'ccs_RE', 'match_num', 'match_num1', 'match_num2',
@@ -370,6 +378,12 @@ class Rescore_SVM():
         #                 'both_m_p_num', 'both_m_p_num1', 'both_m_p_num2', 'cosine', 'SA', 'pearson', 'spearman']
         feature_list = ['Charge', 'Re-score_CSM', 'len1', 'len2', 'rt_AE', 'match_num', 'match_num1', 'match_num2',
                         'both_m_p_num', 'both_m_p_num1', 'both_m_p_num2', 'cosine', 'SA', 'pearson', 'spearman']
+
+        if 'ccs_RE' in data.columns:
+            feature_list.append('ccs_RE')
+            print('SVM rescoring mode: CCS-aware (16 features)')
+        else:
+            print('SVM rescoring mode: no-CCS (15 features)')
 
         data_target = data[data['Target_Decoy'] == 2]
         data_decoy = data[data['Target_Decoy'] != 2]

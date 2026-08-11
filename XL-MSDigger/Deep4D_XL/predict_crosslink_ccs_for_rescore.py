@@ -50,6 +50,7 @@ def predict(data_dir, load_ccs_param_dir, batch_size):
             charge = batch['charge'].to(device=device,dtype=torch.float32)
             order = np.array(batch['order'])
             ccs = ccs/norm
+            m_z = m_z/norm
             mask1 = get_mask(peptide1, pep1_len).to(device=device, dtype=torch.bool)              
             mask2 = get_mask(peptide2, pep2_len).to(device=device, dtype=torch.bool)              
             with torch.no_grad():               
