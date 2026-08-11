@@ -29,7 +29,7 @@ The main validated fixes are:
 - generation of the all-candidate precursor and MS/MS files required for rescoring;
 - restriction of Deep4D-XL fine-tuning to intra-protein cross-linked PSMs, while retaining all candidates for downstream rescoring;
 - corrected six-value preprocessing return handling in the DDA driver;
-- explicit protection against silently applying the no-CCS DDA workflow to data containing explicit ion-mobility metadata;
+- automatic DDA routing between no-CCS and CCS-aware workflows according to the presence of explicit ion-mobility metadata;
 - preservation of the full DNN parameter-search table;
 - preservation of preprocessing and model intermediates by default, with optional cleanup;
 - deterministic Deep4D-XL MS/MS and RT fine-tuning on the validated CUDA/PyTorch/hardware stack.
@@ -70,6 +70,42 @@ At 1% FDR for inter-protein target CSMs:
 The selected DNN rescoring configuration for this validation run used 2-fold cross-validation, 30 epochs, a learning rate of `0.01`, and a maximum training sample size of `2000`.
 
 These values should be interpreted as validation results for the supplied test dataset rather than as expected identification counts for other datasets.
+
+
+### DDA CCS-aware workflow support
+
+The DDA pLink workflow now supports both no-CCS and CCS-aware processing.
+
+For MGF data without explicit ion-mobility metadata, XL-MSDigger follows the validated no-CCS route using MS/MS and retention-time prediction features. For MGF data containing explicit ion-mobility metadata, the driver automatically selects the CCS-aware route and uses MS/MS, retention time, and CCS prediction features.
+
+The CCS-aware implementation includes:
+
+- corrected precursor m/z normalization in candidate CCS prediction to match CCS model training;
+- deterministic Deep4D-XL CCS fine-tuning configuration;
+- automatic selection of the CCS-aware Deep4D-XL fine-tuning and prediction modules;
+- inclusion of `ccs_RE` in DNN and SVM rescoring when CCS features are available;
+- dynamic DNN input dimensionality, using 15 features for no-CCS data and 16 features for CCS-aware data;
+- protection against insufficient validation-batch sizes during CCS-aware fine-tuning;
+- inclusion of CCS intermediates in optional workflow cleanup.
+
+Because no suitable real ion-mobility cross-linking MS dataset was available for this validation, CCS support has been validated through source-level checks and synthetic integration tests rather than a real-data end-to-end CCS experiment. The synthetic tests confirmed explicit ion-mobility detection, CCS calculation and encoding, bundled CCS-model inference, finite `ccs_RE` generation, MS/MS + RT + CCS feature integration, and 16-feature DNN input handling.
+
+These tests establish that the CCS-aware software path is internally functional, but they should not be interpreted as biological validation of CCS prediction accuracy or as validation of instrument-specific ion-mobility metadata conventions.
+
+### No-CCS regression after CCS implementation
+
+After addition of CCS-aware routing, the complete supplied pLink2 no-CCS test dataset was rerun to verify that existing behavior was unchanged.
+
+The regression run processed 76,077 candidate CSMs and 72,602 inter-protein candidates. At 1% FDR, the result reproduced the previous deterministic validation exactly: 75 original inter-protein target CSMs and 83 rescored targets, comprising 65 retained targets, 18 newly identified targets, and 10 lost targets, corresponding to 86.7% sensitivity and a +10.7% net change.
+
+The deterministic MS/MS and RT checkpoints were also byte-identical to the earlier validated run, with SHA256 values:
+
+```text
+MS/MS: 9b08fa32ff39852c9f8e21ad69a623672c183156bdefd32104621954c975464a
+RT:    f7be1713f249c65c5326c8d0df9b4a2d0a687915b0beadfe82c3ff0be60805c1
+```
+
+This regression confirms that addition of the CCS-aware DDA path did not alter the validated no-CCS DDA results on the supplied test dataset.
 
 ### Reproducibility scope
 
