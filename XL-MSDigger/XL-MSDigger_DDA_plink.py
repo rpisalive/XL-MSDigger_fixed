@@ -37,6 +37,22 @@ def get_args():
         )
     )
     parser.add_argument('--mod_ini', type=str, default=DEFAULT_MOD_INI)
+    parser.add_argument(
+        '--crosslinker',
+        type=str,
+        default='DSS',
+        help='Crosslinker name used for theoretical fragment generation.'
+    )
+    parser.add_argument(
+        '--plink_score_higher_better',
+        type=int,
+        choices=[0, 1],
+        default=0,
+        help=(
+            'Set to 1 for pLink3 Score semantics where higher Score '
+            'is better. Default 0 preserves the validated legacy behavior.'
+        )
+    )
     return parser.parse_args()
 
 def find_plink_params(plink_path):
@@ -53,7 +69,16 @@ def find_plink_params(plink_path):
 
 def run():
     args = get_args()          
-    plink = plink_with_msconvert_mgf()
+    plink = plink_with_msconvert_mgf(
+        crosslinker=args.crosslinker,
+        score_higher_better=bool(args.plink_score_higher_better)
+    )
+
+    print("Crosslinker:", args.crosslinker)
+    print(
+        "pLink score higher-is-better:",
+        bool(args.plink_score_higher_better)
+    )
     (
         msms_dir,
         ccs_dir,
@@ -243,47 +268,91 @@ def run():
     #   Q-value_CSM  = Q-value
     # --------------------------------------------------
 
-    required_source_columns = [
-        "score",
-        "Q-value"
-    ]
+    # --------------------------------------------------
+    # Preserve native pLink3 rescoring fields whenever
+    # they are present.
+    #
+    # Older validated pLink output lacked these native
+    # columns, so retain the previous aliases as fallback.
+    # --------------------------------------------------
 
-    missing_source_columns = [
-        col
-        for col in required_source_columns
-        if col not in candidate_feature.columns
-    ]
+    if "Re-score_CSM" in candidate_feature.columns:
 
-    if missing_source_columns:
-        raise RuntimeError(
-            "Cannot prepare DDA rescoring features. "
-            f"Missing columns: {missing_source_columns}"
+        candidate_feature["Re-score_CSM"] = pd.to_numeric(
+            candidate_feature["Re-score_CSM"],
+            errors="raise"
         )
 
-    candidate_feature["Re-score_CSM"] = (
-        candidate_feature["score"]
-    )
+        print(
+            "Using native pLink Re-score_CSM."
+        )
 
-    candidate_feature["Q-value_CSM"] = (
-        candidate_feature["Q-value"]
-    )
+    elif "score" in candidate_feature.columns:
+
+        candidate_feature["Re-score_CSM"] = (
+            candidate_feature["score"]
+        )
+
+        print(
+            "Native Re-score_CSM absent; "
+            "using legacy alias Re-score_CSM = score."
+        )
+
+    else:
+        raise RuntimeError(
+            "Cannot prepare DDA rescoring features: "
+            "neither Re-score_CSM nor score is available."
+        )
+
+
+    if "Q-value_CSM" in candidate_feature.columns:
+
+        candidate_feature["Q-value_CSM"] = pd.to_numeric(
+            candidate_feature["Q-value_CSM"],
+            errors="raise"
+        )
+
+        print(
+            "Using native pLink Q-value_CSM."
+        )
+
+    elif "Q-value" in candidate_feature.columns:
+
+        candidate_feature["Q-value_CSM"] = (
+            candidate_feature["Q-value"]
+        )
+
+        print(
+            "Native Q-value_CSM absent; "
+            "using legacy alias Q-value_CSM = Q-value."
+        )
+
+    else:
+        raise RuntimeError(
+            "Cannot prepare DDA rescoring features: "
+            "neither Q-value_CSM nor Q-value is available."
+        )
+
 
     print(
         "Candidate feature rows:",
         len(candidate_feature)
     )
 
-    print(
-        "Re-score_CSM equals score:",
-        candidate_feature["Re-score_CSM"]
-        .equals(candidate_feature["score"])
-    )
+    if "score" in candidate_feature.columns:
+        print(
+            "Re-score_CSM equals score:",
+            candidate_feature["Re-score_CSM"]
+            .equals(candidate_feature["score"])
+        )
 
-    print(
-        "Q-value_CSM equals Q-value:",
-        candidate_feature["Q-value_CSM"]
-        .equals(candidate_feature["Q-value"])
-    )
+    if "Q-value" in candidate_feature.columns:
+        print(
+            "Q-value_CSM equals Q-value:",
+            candidate_feature["Q-value_CSM"]
+            .equals(candidate_feature["Q-value"])
+        )
+
 
     if (
         "Target_Decoy" in candidate_feature.columns

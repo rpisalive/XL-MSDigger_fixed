@@ -11,7 +11,7 @@ class plink_with_msconvert_mgf():
     """适用于msconvert软件生成的mgf文件和plink2搜库结果的处理类"""
 
     def __init__(self, crosslinker='DSS', fragment_ppm=0.00002, fragment_num=24, min_mz=0, max_mz=1700,
-                 intensity_threshold=0, plink_score_cutoff=1):
+                 intensity_threshold=0, plink_score_cutoff=1, score_higher_better=False):
         self.crosslinker = crosslinker
         self.frag_ppm = fragment_ppm
         self.frag_num = fragment_num
@@ -19,6 +19,15 @@ class plink_with_msconvert_mgf():
         self.max_mz = max_mz
         self.intensity_threshold = intensity_threshold
         self.plink_score_cutoff = plink_score_cutoff
+        self.score_higher_better = bool(score_higher_better)
+
+    def _best_score_index(self, scores):
+        values = np.asarray(scores, dtype=float)
+
+        if self.score_higher_better:
+            return int(np.argmax(values))
+
+        return int(np.argmin(values))
 
     def extract_from_plink_xl_peptide(self, xl_peptide):
         """用于从plink的交联肽序列中提取两条肽和位点的信息"""
@@ -961,7 +970,7 @@ class plink_with_msconvert_mgf():
                 data2 = data1.iloc[index_list]
                 q_list = list(data2['score'])
                 psm_list = list(data2['title'])
-                psm = psm_list[int(q_list.index(min(q_list)))]
+                psm = psm_list[self._best_score_index(q_list)]
                 data3 = data2[data2['title'] == psm]
                 lenth2 = len(data3['combine_peptide_z'])
                 data5[lenth1:(lenth1 + lenth2), :] = np.array(data3)                        
@@ -972,7 +981,7 @@ class plink_with_msconvert_mgf():
         data2 = data1.iloc[index_list]
         q_list = list(data2['score'])
         psm_list = list(data2['title'])
-        psm = psm_list[int(q_list.index(min(q_list)))]
+        psm = psm_list[self._best_score_index(q_list)]
         data3 = data2[data2['title'] == psm]
         lenth2 = len(data3['combine_peptide_z'])
         data5[lenth1:(lenth1 + lenth2), :] = np.array(data3)                        
@@ -1001,7 +1010,7 @@ class plink_with_msconvert_mgf():
                 data2 = data1.iloc[index_list]
                 q_list = list(data2['score'])
                 psm_list = list(data2['title'])
-                psm = psm_list[int(q_list.index(min(q_list)))]
+                psm = psm_list[self._best_score_index(q_list)]
                 data3 = data2[data2['title'] == psm]
                 lenth2 = len(data3['combine_peptide'])
                 data5[lenth1:(lenth1 + lenth2), :] = np.array(data3)                        
@@ -1012,7 +1021,7 @@ class plink_with_msconvert_mgf():
         data2 = data1.iloc[index_list]
         q_list = list(data2['score'])
         psm_list = list(data2['title'])
-        psm = psm_list[int(q_list.index(min(q_list)))]
+        psm = psm_list[self._best_score_index(q_list)]
         data3 = data2[data2['title'] == psm]
         lenth2 = len(data3['combine_peptide'])
         data5[lenth1:(lenth1 + lenth2), :] = np.array(data3)                        
@@ -1183,7 +1192,7 @@ class plink_with_msconvert_mgf():
                 data2 = data1.iloc[index_list]
                 q_list = list(data2['score'])
                 psm_list = list(data2['title'])
-                psm = psm_list[int(q_list.index(min(q_list)))]
+                psm = psm_list[self._best_score_index(q_list)]
                 data3 = data2[data2['title'] == psm]
                 lenth2 = len(data3['combine_peptide_z'])
                 data5[lenth1:(lenth1 + lenth2), :] = np.array(data3)                        
@@ -1194,7 +1203,7 @@ class plink_with_msconvert_mgf():
         data2 = data1.iloc[index_list]
         q_list = list(data2['score'])
         psm_list = list(data2['title'])
-        psm = psm_list[int(q_list.index(min(q_list)))]
+        psm = psm_list[self._best_score_index(q_list)]
         data3 = data2[data2['title'] == psm]
         lenth2 = len(data3['combine_peptide_z'])
         data5[lenth1:(lenth1 + lenth2), :] = np.array(data3)
