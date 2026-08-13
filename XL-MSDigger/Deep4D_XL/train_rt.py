@@ -62,7 +62,18 @@ def train(model,device,epochs=30, batch_size=50,lr=0.00001,val_percent=0.1, trai
     global_step = 0
     optimizer = optim.Adam(model.parameters(), lr=lr, betas=(0.9, 0.999), eps=1e-08, weight_decay=0, amsgrad=False)                                           
     scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer=optimizer, T_0=10, T_mult=2, eta_min=0.00000001)
-    best_index = 10
+    # Always allow the first finite validation result to
+    # establish a checkpoint. The previous fixed threshold
+    # of 10 could leave best_checkpoint undefined.
+    best_index = float("inf")
+    best_checkpoint = None
+
+    # Avoid modulo-by-zero for small fine-tuning datasets.
+    validation_interval = max(
+        1,
+        n_train // (2 * batch_size)
+    )
+
     for epoch in range(epochs):
         model.train()                
         local_step = 0
@@ -90,18 +101,59 @@ def train(model,device,epochs=30, batch_size=50,lr=0.00001,val_percent=0.1, trai
                 optimizer.step()
                 pbar.update(peptide1.shape[0])
                 global_step += 1
-                if global_step % (n_train // (2 * batch_size)) == 0:
+                if global_step % validation_interval == 0:
                     MAE = eval_model(model, val_loader, device, norm)
                     writer.add_scalar('learning rate', optimizer.param_groups[0]['lr'], global_step)
                     logging.info('Mean absolute error: {}'.format(MAE))
-                    if MAE < best_index:
-                        torch.save(model.state_dict(),
-                                   checkpoint_dir + f'model_param_epoch{epoch + 1}global_step{global_step}MAE{MAE}.pth')                            
-                        logging.info(f'Checkpoint {epoch + 1}global_step{global_step} saved !')
-                        best_index = MAE
-                        best_checkpoint = f'model_param_epoch{epoch + 1}global_step{global_step}MAE{MAE}.pth'
+                    mae_value = float(
+                        MAE.detach().cpu()
+                    )
+
+                    if (
+                        np.isfinite(mae_value)
+                        and mae_value < best_index
+                    ):
+                        best_checkpoint = (
+                            f'model_param_epoch{epoch + 1}'
+                            f'global_step{global_step}'
+                            f'MAE{mae_value}.pth'
+                        )
+
+                        torch.save(
+                            model.state_dict(),
+                            os.path.join(
+                                checkpoint_dir,
+                                best_checkpoint
+                            )
+                        )
+
+                        logging.info(
+                            f'Checkpoint {epoch + 1}'
+                            f'global_step{global_step} saved !'
+                        )
+
+                        best_index = mae_value
         scheduler.step()
     writer.close()
+
+    # Defensive fallback for pathological validation output
+    # such as all-NaN MAE values.
+    if best_checkpoint is None:
+        best_checkpoint = "model_param_final.pth"
+
+        torch.save(
+            model.state_dict(),
+            os.path.join(
+                checkpoint_dir,
+                best_checkpoint
+            )
+        )
+
+        logging.warning(
+            "No finite validation MAE was available; "
+            "saved the final RT model as fallback."
+        )
+
     return best_checkpoint
 
 def do_train(traindir, load_rt_param_dir, epochs, batch_size, lr, vali_rate):

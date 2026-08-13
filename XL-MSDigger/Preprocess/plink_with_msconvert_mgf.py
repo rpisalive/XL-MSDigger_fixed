@@ -212,11 +212,17 @@ class plink_with_msconvert_mgf():
                 ):
 
                     try:
-                        current_rt = float(
-                            line.split(
-                                "=",
-                                1
-                            )[1].strip()
+                        # Explicit MGF RTINSECONDS is in seconds.
+                        # Deep4D-XL RT models operate on minute-scale
+                        # chromatographic retention times.
+                        current_rt = (
+                            float(
+                                line.split(
+                                    "=",
+                                    1
+                                )[1].strip()
+                            )
+                            / 60.0
                         )
                     except (ValueError, TypeError):
                         pass
@@ -360,8 +366,13 @@ class plink_with_msconvert_mgf():
                 and line.startswith("RTINSECONDS=")
             ):
                 try:
-                    rt = float(
-                        line.split("=", 1)[1].strip()
+                    # Explicit MGF RTINSECONDS is in seconds.
+                    # Convert to minutes for Deep4D-XL.
+                    rt = (
+                        float(
+                            line.split("=", 1)[1].strip()
+                        )
+                        / 60.0
                     )
                 except (ValueError, TypeError):
                     pass
