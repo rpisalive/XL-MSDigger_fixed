@@ -25,6 +25,7 @@ The main validated fixes are:
 
 - corrected package import handling in the pLink/MGF preprocessing module;
 - single-pass MGF metadata indexing to avoid repeated full-file searches;
+- optional conservative cleanup of duplicated `SCANS` records observed in Waters/ProteoWizard-derived MGF exports, with audit logging and safety checks;
 - support for retention time and ion-mobility metadata embedded in MGF `TITLE` fields;
 - corrected and indexed MGF fragment-spectrum matching;
 - generation of the all-candidate precursor and MS/MS files required for rescoring;
@@ -100,6 +101,42 @@ This small dataset is used as an independent software and portability validation
 The final pLink3-compatible code was then rerun on the original supplied XL-MSDigger DDA test dataset. The regression reproduced the archived final output exactly: 83 rows, the same 83 target-target CSM Orders, and exact pandas equality across all common columns.
 
 The selected DNN configuration remained `cv=2`, `epoch=30`, `lr=0.01`, and `max_train_number=2000`. The corrected parameter-search table reports 83 target-target rescored identifications rather than the previous value of 87 because target-decoy and decoy-decoy rows are no longer counted as new identifications. This correction did not change the selected model or the final 83-CSM result.
+
+#### Optional preprocessing for Waters/ProteoWizard MGF exports
+
+During validation of the independent Waters DDA dataset, the supplied Waters/ProteoWizard-derived MGF export contained duplicated `SCANS` identifiers. In the observed duplicate groups, the fragment-ion peak lists were identical, while precursor metadata such as charge or precursor m/z could differ. Duplicate scan identifiers can make downstream matching between MGF spectra and pLink3 results ambiguous.
+
+`XL-MSDigger/Preprocess/clean_mgf_duplicates.py` provides an optional, conservative preprocessing utility for this situation. It is not required for MGF files that do not contain this duplicate-scan pattern.
+
+For records sharing the same `SCANS` value, the cleaner applies the following rules:
+
+1. If the MS2 peak lists differ, processing aborts and the file requires manual review.
+2. If the MS2 peak lists are identical but precursor charges differ, the highest-charge record is retained.
+3. If the remaining records have the same charge and their precursor m/z values differ by approximately an integer isotope spacing, the lowest precursor m/z is retained.
+4. Otherwise, the first record in file order is retained.
+
+Selected MGF spectrum blocks are copied byte-for-byte, and every duplicate decision is written to an audit CSV.
+
+A dry run is recommended first:
+
+```bash
+python XL-MSDigger/Preprocess/clean_mgf_duplicates.py \
+    /path/to/input.mgf \
+    --outdir /path/to/output \
+    --dry-run
+```
+
+To write the cleaned MGF and audit report:
+
+```bash
+python XL-MSDigger/Preprocess/clean_mgf_duplicates.py \
+    /path/to/input.mgf \
+    --outdir /path/to/output
+```
+
+The generated files are named `<input>_plink3_ready.mgf` and `<input>_dedup_report.csv`.
+
+This utility was developed and validated for the Waters/ProteoWizard MGF convention encountered in the independent validation dataset. It should not be applied blindly to unrelated MGF formats; in particular, any duplicated scan group with non-identical fragment spectra is deliberately treated as an error rather than automatically collapsed.
 
 #### pLink3 DDA usage
 
