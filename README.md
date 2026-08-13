@@ -6,10 +6,11 @@
 > [Chen-micslab/XL-MSDigger](https://github.com/Chen-micslab/XL-MSDigger).
 > It is not the official XL-MSDigger repository.
 >
-> The modifications in this repository address reproducibility and execution
-> issues identified during validation of the DDA pLink2 workflow, including
-> MGF preprocessing, candidate generation, DNN rescoring output preservation,
-> and deterministic Deep4D-XL fine-tuning.
+> The modifications in this repository address reproducibility, compatibility,
+> and execution issues identified during validation of the DDA pLink workflow,
+> including legacy pLink2-style output and pLink3 output. The fixes cover MGF
+> preprocessing, candidate generation, Deep4D-XL fine-tuning, DNN/SVM rescoring,
+> and preservation of reproducible intermediate and final outputs.
 >
 > Original XL-MSDigger authors and software remain credited under the
 > repository's MIT License.
@@ -18,7 +19,7 @@
 
 ## Validated fixes and reproducibility
 
-This repository contains targeted fixes to the DDA pLink2 workflow of XL-MSDigger. The corrected workflow was validated using the original XL-MSDigger pLink2 test dataset and an end-to-end run from pLink preprocessing through Deep4D-XL fine-tuning, candidate feature prediction, DNN rescoring, and final 1% FDR filtering.
+This repository contains targeted fixes to the DDA pLink workflow of XL-MSDigger. The corrected workflow has been validated both against the original XL-MSDigger supplied pLink test dataset and against an independent real Waters DDA dataset searched with pLink3. Validation covered pLink preprocessing, Deep4D-XL fine-tuning, candidate feature prediction, DNN rescoring, and final 1% FDR filtering.
 
 The main validated fixes are:
 
@@ -32,7 +33,14 @@ The main validated fixes are:
 - automatic DDA routing between no-CCS and CCS-aware workflows according to the presence of explicit ion-mobility metadata;
 - preservation of the full DNN parameter-search table;
 - preservation of preprocessing and model intermediates by default, with optional cleanup;
-- deterministic Deep4D-XL MS/MS and RT fine-tuning on the validated CUDA/PyTorch/hardware stack.
+- deterministic Deep4D-XL MS/MS and RT fine-tuning on the validated CUDA/PyTorch/hardware stack;
+- configurable pLink score direction, including higher-is-better pLink3 `Score` semantics while preserving the legacy default behavior;
+- native-first handling of pLink3 `Re-score_CSM` and `Q-value_CSM`, with compatibility fallbacks for legacy inputs lacking these columns;
+- configurable crosslinker selection through `--crosslinker`, while retaining `DSS` as the default;
+- conversion of explicit MGF `RTINSECONDS` values from seconds to the minute-scale retention times expected by Deep4D-XL, without changing legacy TITLE-embedded RT handling;
+- robust RT checkpoint selection and validation scheduling for small fine-tuning datasets;
+- target-target-only identification counts for DNN/SVM hyperparameter evaluation while retaining target-decoy rows for FDR estimation;
+- correction of parameter selection so sensitivity-qualified models are selected only from the qualifying subset.
 
 ### Deterministic training validation
 
@@ -71,6 +79,57 @@ The selected DNN rescoring configuration for this validation run used 2-fold cro
 
 These values should be interpreted as validation results for the supplied test dataset rather than as expected identification counts for other datasets.
 
+
+### DDA pLink3 compatibility and independent real-data validation
+
+The DDA workflow was additionally validated using an independent Waters DDA cross-linking dataset searched with pLink3.
+
+This validation exercised behavior that was not exposed by the supplied XL-MSDigger benchmark, including higher-is-better pLink3 score semantics, native `Re-score_CSM` and `Q-value_CSM` columns, explicit `RTINSECONDS` metadata, configurable crosslinker chemistry, and small-dataset Deep4D-XL fine-tuning.
+
+For the independent no-CCS pLink3 validation sample:
+
+- 11,345 MGF spectra were indexed;
+- 115 filtered cross-linked CSMs were read from pLink3;
+- 111 intra-protein CSMs were available before peptide-level fine-tuning reduction;
+- 142 rescoring candidates were generated with no missing retention times;
+- all 84 DNN parameter combinations completed successfully;
+- 7 inter-protein target-target CSMs passed the final 1% XL-MSDigger FDR threshold.
+
+This small dataset is used as an independent software and portability validation rather than as a general estimate of XL-MSDigger identification performance.
+
+The final pLink3-compatible code was then rerun on the original supplied XL-MSDigger DDA test dataset. The regression reproduced the archived final output exactly: 83 rows, the same 83 target-target CSM Orders, and exact pandas equality across all common columns.
+
+The selected DNN configuration remained `cv=2`, `epoch=30`, `lr=0.01`, and `max_train_number=2000`. The corrected parameter-search table reports 83 target-target rescored identifications rather than the previous value of 87 because target-decoy and decoy-decoy rows are no longer counted as new identifications. This correction did not change the selected model or the final 83-CSM result.
+
+#### pLink3 DDA usage
+
+For pLink3 output where larger `Score` values are better, use:
+
+```bash
+python XL-MSDigger_DDA_plink.py \
+    --plinkfile /path/to/plink3_output \
+    --mgf_dir /path/to/input.mgf \
+    --crosslinker DSS \
+    --plink_score_higher_better 1 \
+    --rescore_model dnn
+```
+
+Set `--crosslinker` to the crosslinker used in the experiment. `DSS` remains the default.
+
+For the supplied legacy pLink-style workflow, the backward-compatible score behavior remains the default:
+
+```bash
+python XL-MSDigger_DDA_plink.py \
+    --plinkfile ./test_data/plink_test \
+    --mgf_dir ./test_data/test.mgf \
+    --crosslinker DSS \
+    --plink_score_higher_better 0 \
+    --rescore_model dnn
+```
+
+`--plink_score_higher_better 0` preserves the validated legacy score-selection behavior.
+
+When native pLink3 `Re-score_CSM` and `Q-value_CSM` columns are present, XL-MSDigger uses them directly. For legacy inputs where these columns are absent, the workflow falls back to the historical score and q-value fields.
 
 ### DDA CCS-aware workflow support
 
