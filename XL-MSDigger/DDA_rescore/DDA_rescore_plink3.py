@@ -291,12 +291,31 @@ class Rescore_DNN():
                             data2 = data1[data1['Protein_Type'] == 2]
                             F = FDR()
                             data2 = F.crosslink_FDR_plink(data2, col_name='ml_score')
-                            data3 = data2[data2['FDR'] < args.rescore_fdr]
-                            data2.to_csv(f'{temp_directory}/{cv}_{epoch}_{lr}_{max_trian_number}.csv', index=False)
-                            new_num = len(data3['FDR'])
-                            data4 = data2[data2['Q-value_CSM'] < args.rescore_fdr]
-                            old_num = len(data4['Q-value_CSM'])
-                            a = set(data3['Order'])
+                            # Keep TT/TD/DD together for target-decoy FDR
+                            # estimation, but count TT CSMs only when
+                            # evaluating hyperparameter performance.
+                            data3 = data2[
+                                data2['FDR'] < args.rescore_fdr
+                            ]
+
+                            data2.to_csv(
+                                f'{temp_directory}/{cv}_{epoch}_{lr}_{max_trian_number}.csv',
+                                index=False
+                            )
+
+                            data3_tt = data3[
+                                data3['Target_Decoy'] == 2
+                            ]
+
+                            data4 = data2[
+                                (data2['Q-value_CSM'] < args.rescore_fdr)
+                                & (data2['Target_Decoy'] == 2)
+                            ]
+
+                            new_num = len(data3_tt)
+                            old_num = len(data4)
+
+                            a = set(data3_tt['Order'])
                             b = set(data4['Order'])
                             c = a & b
                             cross_num = len(c)
@@ -427,13 +446,31 @@ class Rescore_SVM():
                             data2 = data1[data1['Protein_Type'] == 2]
                             F = FDR()
                             data2 = F.crosslink_FDR_plink(data2, col_name='ml_score')
-                            data3 = data2[data2['FDR'] < 0.01]
-                            data2.to_csv(f'{temp_directory}/{cv_fold}_{gamma}_{c_svm}_{max_trian_number}.csv',
-                                         index=False)
-                            new_num = len(data3['FDR'])
-                            data4 = data2[data2['Q-value_CSM'] < 0.01]
-                            old_num = len(data4['Q-value_CSM'])
-                            a = set(data3['Order'])
+                            # Keep TT/TD/DD together for target-decoy FDR
+                            # estimation, but count TT CSMs only when
+                            # evaluating hyperparameter performance.
+                            data3 = data2[
+                                data2['FDR'] < 0.01
+                            ]
+
+                            data2.to_csv(
+                                f'{temp_directory}/{cv_fold}_{gamma}_{c_svm}_{max_trian_number}.csv',
+                                index=False
+                            )
+
+                            data3_tt = data3[
+                                data3['Target_Decoy'] == 2
+                            ]
+
+                            data4 = data2[
+                                (data2['Q-value_CSM'] < 0.01)
+                                & (data2['Target_Decoy'] == 2)
+                            ]
+
+                            new_num = len(data3_tt)
+                            old_num = len(data4)
+
+                            a = set(data3_tt['Order'])
                             b = set(data4['Order'])
                             c = a & b
                             cross_num = len(c)
@@ -516,7 +553,9 @@ def choose_parameter(data):
     if (data['sensitivity'] >= 0.8).any():
         data1 = data[data['sensitivity'] >= 0.8]
         max_value = data1['new_number'].max()
-        result_rows = data[data['new_number'] == max_value].head(1)
+        result_rows = data1[
+            data1['new_number'] == max_value
+        ].head(1)
     else:
         max_value = data['sensitivity'].max()
         result_rows = data[data['sensitivity'] == max_value].head(1)
